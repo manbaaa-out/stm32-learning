@@ -1,0 +1,23 @@
+# 编译产物(任意子工程层级)
+build/
+**/build/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# CMake 生成物
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+compile_commands.json
+
+# IDE / 编辑器
+.vscode/
+.idea/
+.cache/
+
+# WSL / NTFS 垃圾
+*:Zone.Identifier
