@@ -21,3 +21,6 @@ compile_commands.json
 
 # WSL / NTFS 垃圾
 *:Zone.Identifier
+
+# 第三方参考源码(本地保留, 不进仓库)
+FreeRTOS-Kernel-main/
