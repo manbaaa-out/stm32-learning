@@ -374,7 +374,16 @@ static void report_frame(const SensorData_t *s)
         f.len = frame_build(0x02, p, 2, f.data);
         xQueueSend(xTxQueue, &f, 0);
     }
-    /* 两个都无效: 这轮静默(last-known-good) */
+    
+    /* 0x04 设备状态: 无条件发, 跟随采样轮, 复用本轮 valid 标志 (§3.3 TYPE 字典)
+    bit0=DHT11 OK, bit1=BH1750 OK, bit2~7 预留=0
+    即便上面两帧都没发(传感器全挂), 这帧也要出去, 让网关知道"节点在, 但外设故障" */
+    {
+        uint8_t st = (uint8_t)((s->th_valid ? 0x01 : 0x00) |
+                               (s->lux_valid ? 0x02 : 0x00));
+        f.len = frame_build(0x04, &st, 1, f.data);
+        xQueueSend(xTxQueue, &f, 0);
+    }
 }
 
 void vSampleReportTask(void *pv)
