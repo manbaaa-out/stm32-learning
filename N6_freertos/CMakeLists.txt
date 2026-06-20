@@ -48,6 +48,11 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    Core/Src/bh1750.c
+    Core/Src/crc16.c
+    Core/Src/dht11.c
+    Core/Src/dwt_delay.c
+    Core/Src/frame_parser.c
 )
 
 # Add include paths

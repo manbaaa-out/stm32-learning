@@ -59,7 +59,10 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
-
+/* DHT11 数据线: PA1。CubeMX 未给该脚设 User Label, 故手动定义,
+   供 dht11.c 使用(放 USER CODE 区, 重新生成不会被覆盖)。 */
+#define DHT11_Pin        GPIO_PIN_1
+#define DHT11_GPIO_Port  GPIOA
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
