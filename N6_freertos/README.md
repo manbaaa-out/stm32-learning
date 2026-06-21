@@ -1,21 +1,45 @@
-# N6_freertos — STM32 FreeRTOS 多协议传感节点
+# N6_freertos · STM32 FreeRTOS 传感节点
 
-> `stm32-learning` 仓库的里程碑 N6:在 STM32F103(蓝丸级)上用**原生 FreeRTOS**(手动移植 ARM_CM3 端口)搭一个多任务传感节点 —— 采集 DHT11 / BH1750,经 USART1 以自定义二进制帧与 [边缘网关](https://github.com/manbaaa-out/embedded-edge-gateway) 双向通信:周期上报 + 响应下行命令,并叠加**事件组「全员报到」看门狗**与 **tickless 低功耗(Sleep)**。
+> 在 STM32F103 上用**原生 FreeRTOS**(手动移植 ARM_CM3 端口)搭的多协议传感节点:采集 DHT11 / BH1750,经 USART1 以自定义二进制帧与[边缘网关](https://github.com/manbaaa-out/embedded-edge-gateway)**双向**通信 —— 周期上报 + 秒级响应下行命令,并叠加**事件组「全员报到」看门狗**与 **tickless 低功耗(Sleep)**。
 
 ![MCU](https://img.shields.io/badge/MCU-STM32F103xB-03234B?logo=stmicroelectronics&logoColor=white)
 ![RTOS](https://img.shields.io/badge/RTOS-FreeRTOS%20(ARM__CM3)-44883E)
-![Toolchain](https://img.shields.io/badge/toolchain-arm--none--eabi%20%2B%20CMake%2FNinja-064F8C?logo=cmake&logoColor=white)
-![Debug](https://img.shields.io/badge/flash-OpenOCD%20%2B%20ST--Link%2FV2-555)
+![Toolchain](https://img.shields.io/badge/build-CMake%2FNinja%20%2B%20arm--none--eabi-064F8C?logo=cmake&logoColor=white)
+![Flash](https://img.shields.io/badge/flash%2Fdebug-OpenOCD%20%2B%20ST--Link%2FV2-555)
+![Warnings](https://img.shields.io/badge/warnings-0-success)
+
+> 这是 [`stm32-learning`](https://github.com/manbaaa-out/stm32-learning) 仓库的里程碑工程 **N6** —— 把前面 N3(UART)、N4(I²C)、N5(单总线)的裸机驱动,在 FreeRTOS 下整合成一个可上线联调的节点。
+
+```
+        ┌──────── 上行:温湿度 / 光照 / 状态 / 心跳 ────────▶
+DHT11 ┐                                                       网关
+BH1750┘  STM32F103 · FreeRTOS                              (Raspberry Pi)
+        ◀──────── 下行:查询 / 设周期(带 seq + ACK)────────┘
+```
+
+## 目录
+
+- [特性](#特性)
+- [硬件与引脚](#硬件与引脚)
+- [架构](#架构)
+- [任务模型](#任务模型)
+- [串口帧协议](#串口帧协议)
+- [看门狗:事件组「全员报到」(N9)](#看门狗事件组全员报到n9)
+- [低功耗:tickless Sleep(N10)](#低功耗tickless-sleepn10)
+- [构建与烧录](#构建与烧录)
+- [调试与排障](#调试与排障)
+- [里程碑](#里程碑)
+- [目录结构](#目录结构)
 
 ## 特性
 
-- **抢占式多任务**:命令(P3)> 发送(P2)> 采样上报(P1)三任务分工,经队列 / 流缓冲 / 互斥量解耦,无共享态裸奔。
-- **双向协议**:上行温湿度 / 光照 / 状态 / 心跳;下行查询(0x20/0x21)与设采样周期(0x22),均带 `seq` + 应答(0x05 查询应答 / 0x06 ACK)。
-- **零拷贝接收**:USART1 `ReceiveToIdle + DMA` 环形收,RX-IDLE 中断把字节 `FromISR` 灌进流缓冲唤醒命令任务 —— 不丢帧、不轮询。
-- **健壮外设**:BH1750 I²C 失败自动**总线恢复**(DeInit → 手动钟脉冲 → 重init)后重试;DHT11 单总线用 DWT 周期计数器做 µs 级时序与超时。
-- **全员报到看门狗(N9)**:IWDG 2s,只有三任务在一轮内**各自打卡集齐**才喂狗 —— 任一任务卡死即放任复位,杜绝「主循环活着但某任务僵死」的假活。
-- **tickless 低功耗(N10)**:空闲即 `WFI` 进 Sleep,睡前停 TIM4 时基、醒后恢复;UART 可秒级唤醒并完整响应命令,且与 IWDG 不冲突。
-- **零警告**:`-Wall -Wextra` 下 0 warning。
+- **抢占式多任务** — 命令(P3)> 发送(P2)> 采样上报(P1)三任务分工,经队列 / 流缓冲 / 互斥量解耦,无共享态裸奔。
+- **双向协议** — 上行温湿度 / 光照 / 状态 / 心跳;下行查询(0x20/0x21)与设采样周期(0x22),均带 `seq` + 应答(0x05 查询应答 / 0x06 ACK),同 seq 幂等。
+- **零拷贝接收** — USART1 `ReceiveToIdle + DMA` 环形收,RX-IDLE 中断把字节 `FromISR` 灌进流缓冲唤醒命令任务 —— 不丢帧、不轮询。
+- **健壮外设** — BH1750 I²C 失败自动**总线恢复**(DeInit → 手动钟脉冲 → 重 init)后重试;DHT11 单总线用 DWT 周期计数器做 µs 级时序与超时。
+- **全员报到看门狗(N9)** — IWDG 2s,只有三任务在一轮内**各自打卡集齐**才喂狗;任一任务卡死即放任复位,杜绝「主循环活着但某任务僵死」的假活。
+- **tickless 低功耗(N10)** — 空闲即 `WFI` 进 Sleep,睡前停 TIM4 时基、醒后恢复;UART 可秒级唤醒并完整响应命令,且与 IWDG 不冲突。
+- **零警告** — `-Wall -Wextra` 下 0 warning。
 
 ## 硬件与引脚
 
@@ -84,7 +108,7 @@ flowchart TB
 
 | 任务 | 优先级 | 阻塞点 | 职责 |
 |---|---|---|---|
-| `vCmdTask` | 3(最高) | `xStreamBufferReceive`(800ms 超时) | 解析下行帧 → `on_frame` 分发 0x20/0x21/0x22,组应答投 `xTxQueue`;§6.2 同 `seq` 幂等重发 |
+| `vCmdTask` | 3(最高) | `xStreamBufferReceive`(800ms 超时) | 解析下行帧 → `on_frame` 分发 0x20/0x21/0x22,组应答投 `xTxQueue`;同 `seq` 幂等重发 |
 | `vTxTask` | 2 | `xQueueReceive`(800ms 超时) | 从 `xTxQueue` 取帧 → `HAL_UART_Transmit` 串行发送(单一发送者) |
 | `vSampleReportTask` | 1 | `vTaskDelayUntil`(1s 绝对栅格) | 1s 心跳 0x03;每 `g_sample_period_ms` 采一轮 → 0x01/0x02/0x04;并驱动喂狗判定 |
 | `IDLE` | 0 | `WFI` | tickless 空闲睡眠 |
@@ -93,7 +117,7 @@ flowchart TB
 
 ## 串口帧协议
 
-与网关共用一套帧格式(`AA 55 | LEN | TYPE | payload… | CRC16_LO CRC16_HI`),CRC16-MODBUS(多项式 `0xA001`,初值 `0xFFFF`),覆盖 `LEN..payload`;`LEN = 1 + len(payload)`(含 TYPE)。
+与网关共用一套帧格式 `AA 55 | LEN | TYPE | payload… | CRC16_LO CRC16_HI`,CRC16-MODBUS(多项式 `0xA001`,初值 `0xFFFF`),覆盖 `LEN..payload`;`LEN = 1 + len(payload)`(含 TYPE)。
 
 | 方向 | TYPE | 含义 | payload |
 |---|---|---|---|
@@ -113,12 +137,12 @@ IWDG 一旦启动便不可关停 —— 关键在于**谁有资格喂它**。本
 
 ## 低功耗:tickless Sleep(N10)
 
-`configUSE_TICKLESS_IDLE=1` 后,空闲任务自动 `WFI` 进 Sleep(仅关 CPU 时钟,外设照常)。两点适配(均在 `FreeRTOSConfig.h` 钩子里,不改 `port.c`):
+`configUSE_TICKLESS_IDLE=1` 后,空闲任务自动 `WFI` 进 Sleep(仅关 CPU 时钟,外设照常)。两点适配均在 `FreeRTOSConfig.h` 钩子里,**不改 `port.c`**:
 
 - `configPRE/POST_SLEEP_PROCESSING` 睡前 `HAL_SuspendTick()` 停 TIM4 时基(它是 1kHz 唤醒源、不停会每 1ms 吵醒 CPU),醒后 `HAL_ResumeTick()` 恢复。
-- 调试期 `__HAL_DBGMCU_FREEZE_IWDG/TIM4()` 冻结计数,避免断点暂停被看门狗复位(F1 的 DBGMCU 无需时钟使能)。
+- 调试期 `__HAL_DBGMCU_FREEZE_IWDG/TIM4()` 冻结计数,避免断点暂停被看门狗复位(F1 的 DBGMCU 常通,无需 `__HAL_RCC_DBGMCU_CLK_ENABLE`)。
 
-实测:空闲时核稳定停在 `WFI`;UART 命令可秒级唤醒并回完整 0x05;静置 14s IWDG 不误复位(`RCC_CSR.IWDGRSTF=0`),tick 计数随睡眠正确补记。更深的 STOP/STANDBY 在「随时响应命令 + 1s 心跳 + 2s 看门狗」前提下不划算,详见项目 `docs/`。
+实测:空闲时核稳定停在 `WFI`;UART 命令秒级唤醒并回完整 0x05;静置 14s IWDG 不误复位(`RCC_CSR.IWDGRSTF=0`),tick 计数随睡眠正确补记。更深的 STOP/STANDBY 在「随时响应命令 + 1s 心跳 + 2s 看门狗」前提下不划算(F1 的 USART 无法从 STOP 唤醒),故止步 Sleep。
 
 ## 构建与烧录
 
@@ -132,7 +156,41 @@ openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
   -c "program build/Debug/N6_freertos.elf verify reset exit"
 ```
 
-调试 / 排障小抄(FreeRTOS-aware gdb、`RCC_CSR` 看复位源等)见仓库 `docs/`。
+## 调试与排障
+
+本机不装 `st-flash`,烧录 / 探测统一用 **OpenOCD**;FreeRTOS 多任务卡死靠 **RTOS-aware gdb** 一眼定位:
+
+```bash
+# 查"哪个任务卡在哪":后台跑带 RTOS 感知的 openocd
+openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
+  -c "stm32f1x.cpu configure -rtos auto" -c init &
+gdb-multiarch build/Debug/N6_freertos.elf \
+  -ex "target extended-remote :3333" \
+  -ex "info threads" -ex "thread apply all bt"   # 每个任务的阻塞点一目了然
+
+# 看复位源:RCC_CSR@0x40021024(IWDGRSTF=bit29 / PINRSTF=bit26),RMVF=bit24 清标志
+openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
+  -c init -c "mdw 0x40021024" -c shutdown
+
+# 把卡死 PC 映射回源码
+arm-none-eabi-addr2line -f -i -e build/Debug/N6_freertos.elf 0x........
+```
+
+> 验证 Sleep:`halt` 后看 PC 是否停在 `vPortSuppressTicksAndSleep` 的 `wfi`;静置后 `RCC_CSR.IWDGRSTF` 仍为 0 即证明喂狗在睡眠期不踩线。
+
+## 里程碑
+
+`stm32-learning` 仓库按 Nx 推进(N3–N6 为并列工程,N9/N10 是本工程内的进阶特性):
+
+| | 里程碑 | 内容 |
+|---|---|---|
+| N1 | 时钟树 | HSE + PLL = 72MHz |
+| N3 | 串口 | USART1 收发(`N3_uart`) |
+| N4 | I²C | 驱动 BH1750(`N4_i2c`) |
+| N5 | 单总线 | 驱动 DHT11(`N5_single_wire`) |
+| **N6** | **FreeRTOS** | **多任务整合 + 帧协议 + 下行命令闭环(本工程)** |
+| N9 | 看门狗 | IWDG 事件组「全员报到」喂狗 |
+| N10 | 低功耗 | tickless idle → Sleep |
 
 ## 目录结构
 
@@ -153,11 +211,7 @@ N6_freertos/
 └── *.ioc              # STM32CubeMX 工程
 ```
 
-> FreeRTOS 内核源在仓库根的 `FreeRTOS-Kernel-main/`(ARM_CM3 端口)。
-
-## 与网关联调
-
-节点上电后即周期上报;网关侧用 `scripts/e2e_preflight.sh` + `e2e_verify.sh` 联调。默认采样周期较长,联调前可先下发 `0x22` 把周期调短。详见 [embedded-edge-gateway](https://github.com/manbaaa-out/embedded-edge-gateway)。
+> FreeRTOS 内核源在仓库根的 `FreeRTOS-Kernel-main/`(ARM_CM3 端口)。配套网关见 [embedded-edge-gateway](https://github.com/manbaaa-out/embedded-edge-gateway)。
 
 ---
 
