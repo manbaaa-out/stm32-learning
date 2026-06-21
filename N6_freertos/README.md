@@ -52,51 +52,9 @@ BH1750┘  STM32F103 · FreeRTOS                              (Raspberry Pi)
 
 ## 架构
 
-节点固件以「数据通路 + 看门狗」两张图呈现。
+两张面板:**(a) 数据通路** —— 传感器 / 串口接收 → 任务 → 发送队列 → 串口发送;**(b) 全员报到看门狗** —— 三任务各自打卡,集齐才喂 IWDG,任一缺位即复位。
 
-**数据通路**(传感器 / 串口接收 → 任务 → 发送队列 → 串口发送)
-
-```mermaid
-flowchart LR
-  DHT["DHT11"]:::sens
-  BH["BH1750"]:::sens
-  RX["USART1 RX<br/>DMA + IDLE 中断"]:::hw
-  RXS(["StreamBuffer"]):::ipc
-  CMD["vCmdTask · P3<br/>解析下行命令"]:::task
-  SAMP["vSampleReportTask · P1<br/>采样 / 心跳"]:::task
-  TXQ(["xTxQueue"]):::ipc
-  TX["vTxTask · P2<br/>串口发送"]:::task
-  OUT["USART1 TX<br/>115200 8N1"]:::hw
-  DHT --> SAMP
-  BH --> SAMP
-  RX --> RXS --> CMD
-  CMD --> TXQ
-  SAMP --> TXQ
-  TXQ --> TX --> OUT
-  classDef sens fill:#dcfce7,stroke:#16a34a
-  classDef hw fill:#dcfce7,stroke:#16a34a
-  classDef ipc fill:#fef3c7,stroke:#d97706
-  classDef task fill:#dbeafe,stroke:#2563eb
-```
-
-**全员报到看门狗**(三任务各自打卡,集齐才喂 IWDG;任一缺位 → 复位)
-
-```mermaid
-flowchart LR
-  CMD["vCmdTask"]:::task
-  SAMP["vSampleReportTask"]:::task
-  TX["vTxTask"]:::task
-  EG(["事件组<br/>三位打卡"]):::ipc
-  IWDG["IWDG · 2s<br/>集齐才喂"]:::wd
-  CMD --> EG
-  SAMP --> EG
-  TX --> EG
-  EG --> IWDG
-  IWDG -.->|"缺位即复位"| CMD
-  classDef task fill:#dbeafe,stroke:#2563eb
-  classDef ipc fill:#fef3c7,stroke:#d97706
-  classDef wd fill:#fee2e2,stroke:#dc2626
-```
+![节点架构](docs/architecture.png)
 
 ## 任务模型
 
