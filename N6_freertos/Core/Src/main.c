@@ -20,9 +20,9 @@
 #include "main.h"
 #include "dma.h"
 #include "i2c.h"
+#include "iwdg.h"
 #include "usart.h"
 #include "gpio.h"
-
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -30,6 +30,7 @@
 #include "task.h"
 #include "queue.h" 
 #include "semphr.h"
+#include "event_groups.h"
 #include "bh1750.h"
 #include "dht11.h"
 #include "dwt_delay.h"
@@ -61,6 +62,12 @@ typedef struct {
 #define HEARTBEAT_MS  1000U
 #define RX_STREAM_SIZE  64
 #define RX_DMA_SIZE     64
+
+/* N9-B 全员报到看门狗: 三个任务各占一 bit, 凑齐才喂狗 */
+#define WDG_BIT_SAMPLE   (1u << 0)   /* vSampleReportTask 打卡 */
+#define WDG_BIT_CMD      (1u << 1)   /* vCmdTask 打卡 */
+#define WDG_BIT_TX       (1u << 2)   /* vTxTask 打卡 */
+#define WDG_BIT_ALL      (WDG_BIT_SAMPLE | WDG_BIT_CMD | WDG_BIT_TX)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,6 +76,7 @@ typedef struct {
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+
 /* USER CODE BEGIN PV */
 QueueHandle_t xTxQueue;
 static SemaphoreHandle_t g_sensor_mutex;
@@ -76,6 +84,7 @@ static volatile uint32_t g_sample_period_ms = 5UL*60*1000;
 static StreamBufferHandle_t g_rx_stream;
 static uint8_t  g_rx_dma_buf[RX_DMA_SIZE];
 static uint16_t g_rx_old_pos = 0;
+static EventGroupHandle_t g_wdg_events;   /* N9-B 全员报到事件组 */
 
 /* USER CODE END PV */
 
@@ -131,6 +140,7 @@ int main(void)
   MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_I2C1_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
   /* 必须先开 DWT 周期计数器: delay_us() 与 dht11_wait_level() 的超时都靠 CYCCNT。
      不开则 CYCCNT 恒为 0, delay_us 死等、DHT11 超时永不触发 → DHT11_Read 在
@@ -147,6 +157,9 @@ int main(void)
 
   g_rx_stream = xStreamBufferCreate(RX_STREAM_SIZE, 1);   // 水位 1: 来一字节就唤醒
   if (g_rx_stream == NULL) { Error_Handler(); }
+
+  g_wdg_events = xEventGroupCreate();                      // N9-B: 全员报到事件组
+  if (g_wdg_events == NULL) { Error_Handler(); }
 
   /* 创建任务并检查返回值: 堆不够(configTOTAL_HEAP_SIZE 太小)时会在此处停住,
      而不是任务静默创建失败、之后行为诡异。优先级: 命令(3) > TX(2) > 采样上报(1) */
@@ -180,10 +193,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
@@ -211,9 +225,11 @@ void SystemClock_Config(void)
 void vTxTask(void* pvParameters) {
   TxFrame_t frame;
   while(1) {
-    if (xQueueReceive(xTxQueue, &frame, portMAX_DELAY) == pdPASS) {
+    /* 超时 500ms 醒一次: 没东西发也要醒来打卡(<1s 判定窗口, 留余量)。 */
+    if (xQueueReceive(xTxQueue, &frame, pdMS_TO_TICKS(500)) == pdPASS) {
       HAL_UART_Transmit(&huart1, frame.data, frame.len, HAL_MAX_DELAY);
     }
+    xEventGroupSetBits(g_wdg_events, WDG_BIT_TX);   // 打卡放 if 外: 任务活着就报到, 不论有没有发
   }
 }
 
@@ -307,9 +323,11 @@ void vCmdTask(void *pv)
 
     uint8_t buf[32];
     for (;;) {
-        size_t n = xStreamBufferReceive(g_rx_stream, buf, sizeof buf, portMAX_DELAY);
+        /* 超时 500ms 醒一次: 没收到数据也要醒来打卡(<1s 判定窗口, 留余量)。 */
+        size_t n = xStreamBufferReceive(g_rx_stream, buf, sizeof buf, pdMS_TO_TICKS(500));
         for (size_t i = 0; i < n; i++)
             frame_parser_feed(&parser, buf[i]);
+        xEventGroupSetBits(g_wdg_events, WDG_BIT_CMD);   // n 可能为 0, 但任务活着就打卡
     }
 }
 
@@ -401,6 +419,14 @@ void vSampleReportTask(void *pv)
     uint32_t   since_sample_ms = 0xFFFFFFFFU;     // 置满, 开机第一轮就采
 
     for (;;) {
+        /* N9-B: 先给自己打卡, 再判定三位是否全齐 —— 顺序不能反, 否则自己这位永远缺。 */
+        xEventGroupSetBits(g_wdg_events, WDG_BIT_SAMPLE);
+        if ((xEventGroupGetBits(g_wdg_events) & WDG_BIT_ALL) == WDG_BIT_ALL) {
+            HAL_IWDG_Refresh(&hiwdg);                        // 三个任务都报到 → 喂狗
+            xEventGroupClearBits(g_wdg_events, WDG_BIT_ALL); // 清零, 开新一轮收集
+        }
+        /* 没齐 → 不喂, 放任 IWDG 倒计时(~2s 后复位) */
+
         send_heartbeat();                          // 每个 1s 节拍发心跳
 
         if (since_sample_ms >= g_sample_period_ms) {
