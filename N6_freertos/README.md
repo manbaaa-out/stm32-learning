@@ -52,53 +52,50 @@ BH1750┘  STM32F103 · FreeRTOS                              (Raspberry Pi)
 
 ## 架构
 
+节点固件以「数据通路 + 看门狗」两张图呈现。
+
+**数据通路**(传感器 / 串口接收 → 任务 → 发送队列 → 串口发送)
+
 ```mermaid
-flowchart TB
-  subgraph APP["应用层 (FreeRTOS · 抢占式 · tick 1kHz)"]
-    direction TB
-    CMDT["vCmdTask · P3 (最高)<br/>StreamBuffer → frame_parser → on_frame<br/>0x20 查光照 · 0x21 查温湿 · 0x22 设周期"]:::task
-    TXT["vTxTask · P2<br/>阻塞 xTxQueue(800ms) → 发送"]:::task
-    SAMP["vSampleReportTask · P1<br/>vTaskDelayUntil 1s 栅格<br/>心跳 0x03 · 周期 sample_all → 0x01/0x02/0x04"]:::task
-    IDLE["IDLE · tickless → WFI Sleep"]:::idle
-  end
+flowchart LR
+  DHT["DHT11"]:::sens
+  BH["BH1750"]:::sens
+  RX["USART1 RX<br/>DMA + IDLE 中断"]:::hw
+  RXS(["StreamBuffer"]):::ipc
+  CMD["vCmdTask · P3<br/>解析下行命令"]:::task
+  SAMP["vSampleReportTask · P1<br/>采样 / 心跳"]:::task
+  TXQ(["xTxQueue"]):::ipc
+  TX["vTxTask · P2<br/>串口发送"]:::task
+  OUT["USART1 TX<br/>115200 8N1"]:::hw
+  DHT --> SAMP
+  BH --> SAMP
+  RX --> RXS --> CMD
+  CMD --> TXQ
+  SAMP --> TXQ
+  TXQ --> TX --> OUT
+  classDef sens fill:#dcfce7,stroke:#16a34a
+  classDef hw fill:#dcfce7,stroke:#16a34a
+  classDef ipc fill:#fef3c7,stroke:#d97706
+  classDef task fill:#dbeafe,stroke:#2563eb
+```
 
-  subgraph KOBJ["内核对象 (IPC)"]
-    direction TB
-    TXQ(["xTxQueue · TxFrame ×8"]):::ipc
-    RXS(["g_rx_stream · StreamBuffer 64B"]):::ipc
-    MUX(["g_sensor_mutex"]):::ipc
-    EG(["g_wdg_events · EventGroup"]):::ipc
-  end
+**全员报到看门狗**(三任务各自打卡,集齐才喂 IWDG;任一缺位 → 复位)
 
-  subgraph DRV["驱动 / 外设"]
-    direction TB
-    BH["BH1750 · I2C1 PB6/PB7<br/>总线恢复 + 重试"]:::sens
-    DHT["DHT11 · 单总线<br/>DWT us 计时"]:::sens
-    RXP["USART1 RX + DMA1_Ch5<br/>ReceiveToIdle 环形"]:::hw
-    RXI["RxEvent ISR<br/>StreamBufferSendFromISR"]:::hw
-    TXP["USART1 TX · 115200 8N1"]:::hw
-    IWDG["IWDG @ LSI · 2s"]:::wd
-  end
-
-  BH --> MUX
-  DHT --> MUX
-  MUX --> SAMP
-  SAMP -->|enqueue| TXQ
-  CMDT -->|"0x05/0x06 应答"| TXQ
-  TXQ --> TXT --> TXP
-  RXP --> RXI --> RXS --> CMDT
-  RXI -.->|"RX-IDLE 唤醒"| IDLE
-
-  SAMP & CMDT & TXT -.->|"打卡 SAMPLE/CMD/TX"| EG
-  EG -->|"三位齐 → HAL_IWDG_Refresh"| IWDG
-  IWDG -.->|"缺位 2s → 系统复位"| APP
-
-  classDef task fill:#e3f2fd,stroke:#1e88e5
-  classDef idle fill:#e0f2f1,stroke:#00897b
-  classDef ipc fill:#fff3e0,stroke:#fb8c00
-  classDef sens fill:#e8f5e9,stroke:#43a047
-  classDef hw fill:#fce4ec,stroke:#d81b60
-  classDef wd fill:#ffebee,stroke:#e53935
+```mermaid
+flowchart LR
+  CMD["vCmdTask"]:::task
+  SAMP["vSampleReportTask"]:::task
+  TX["vTxTask"]:::task
+  EG(["事件组<br/>三位打卡"]):::ipc
+  IWDG["IWDG · 2s<br/>集齐才喂"]:::wd
+  CMD --> EG
+  SAMP --> EG
+  TX --> EG
+  EG --> IWDG
+  IWDG -.->|"缺位即复位"| CMD
+  classDef task fill:#dbeafe,stroke:#2563eb
+  classDef ipc fill:#fef3c7,stroke:#d97706
+  classDef wd fill:#fee2e2,stroke:#dc2626
 ```
 
 ## 任务模型
