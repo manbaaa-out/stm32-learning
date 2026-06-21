@@ -32,6 +32,7 @@
 #include "semphr.h"
 #include "bh1750.h"
 #include "dht11.h"
+#include "dwt_delay.h"
 #include "stream_buffer.h"
 #include "frame_parser.h"
 #include "crc16.h"
@@ -131,6 +132,13 @@ int main(void)
   MX_USART1_UART_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+  /* 必须先开 DWT 周期计数器: delay_us() 与 dht11_wait_level() 的超时都靠 CYCCNT。
+     不开则 CYCCNT 恒为 0, delay_us 死等、DHT11 超时永不触发 → DHT11_Read 在
+     taskENTER_CRITICAL 临界区里死循环, SysTick 被屏蔽, 整个 RTOS 卡死, 串口零输出。 */
+  DWT_Init();
+
+  BH1750_Init();   /* 上电+设连续高分辨率模式(原来漏调,芯片处于不确定态) */
+
   xTxQueue = xQueueCreate(8, sizeof(TxFrame_t));
   if (xTxQueue == NULL) {Error_Handler();}
 

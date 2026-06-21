@@ -44,7 +44,10 @@ void MX_DMA_Init(void)
 
   /* DMA interrupt init */
   /* DMA1_Channel5_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 0, 0);
+  /* 优先级必须 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY(=5):该 DMA(USART1_RX 循环)
+     的 RxEvent 回调会调用 xStreamBufferSendFromISR;原值 0 比内核临界区还高,
+     FromISR 里 vPortValidateInterruptPriority 的 configASSERT 必失败 → 关中断死循环卡死。 */
+  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
 
 }
