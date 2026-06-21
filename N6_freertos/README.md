@@ -1,4 +1,4 @@
-# N6_freertos · STM32 FreeRTOS 传感节点
+# STM32 FreeRTOS 传感节点
 
 > 在 STM32F103 上用**原生 FreeRTOS**(手动移植 ARM_CM3 端口)搭的多协议传感节点:采集 DHT11 / BH1750,经 USART1 以自定义二进制帧与[边缘网关](https://github.com/manbaaa-out/embedded-edge-gateway)**双向**通信 —— 周期上报 + 秒级响应下行命令,并叠加**事件组「全员报到」看门狗**与 **tickless 低功耗(Sleep)**。
 
@@ -7,8 +7,6 @@
 ![Toolchain](https://img.shields.io/badge/build-CMake%2FNinja%20%2B%20arm--none--eabi-064F8C?logo=cmake&logoColor=white)
 ![Flash](https://img.shields.io/badge/flash%2Fdebug-OpenOCD%20%2B%20ST--Link%2FV2-555)
 ![Warnings](https://img.shields.io/badge/warnings-0-success)
-
-> 这是 [`stm32-learning`](https://github.com/manbaaa-out/stm32-learning) 仓库的里程碑工程 **N6** —— 把前面 N3(UART)、N4(I²C)、N5(单总线)的裸机驱动,在 FreeRTOS 下整合成一个可上线联调的节点。
 
 ```
         ┌──────── 上行:温湿度 / 光照 / 状态 / 心跳 ────────▶
@@ -24,11 +22,10 @@ BH1750┘  STM32F103 · FreeRTOS                              (Raspberry Pi)
 - [架构](#架构)
 - [任务模型](#任务模型)
 - [串口帧协议](#串口帧协议)
-- [看门狗:事件组「全员报到」(N9)](#看门狗事件组全员报到n9)
-- [低功耗:tickless Sleep(N10)](#低功耗tickless-sleepn10)
+- [看门狗:事件组「全员报到」](#看门狗事件组全员报到)
+- [低功耗:tickless Sleep](#低功耗tickless-sleep)
 - [构建与烧录](#构建与烧录)
 - [调试与排障](#调试与排障)
-- [里程碑](#里程碑)
 - [目录结构](#目录结构)
 
 ## 特性
@@ -37,8 +34,8 @@ BH1750┘  STM32F103 · FreeRTOS                              (Raspberry Pi)
 - **双向协议** — 上行温湿度 / 光照 / 状态 / 心跳;下行查询(0x20/0x21)与设采样周期(0x22),均带 `seq` + 应答(0x05 查询应答 / 0x06 ACK),同 seq 幂等。
 - **零拷贝接收** — USART1 `ReceiveToIdle + DMA` 环形收,RX-IDLE 中断把字节 `FromISR` 灌进流缓冲唤醒命令任务 —— 不丢帧、不轮询。
 - **健壮外设** — BH1750 I²C 失败自动**总线恢复**(DeInit → 手动钟脉冲 → 重 init)后重试;DHT11 单总线用 DWT 周期计数器做 µs 级时序与超时。
-- **全员报到看门狗(N9)** — IWDG 2s,只有三任务在一轮内**各自打卡集齐**才喂狗;任一任务卡死即放任复位,杜绝「主循环活着但某任务僵死」的假活。
-- **tickless 低功耗(N10)** — 空闲即 `WFI` 进 Sleep,睡前停 TIM4 时基、醒后恢复;UART 可秒级唤醒并完整响应命令,且与 IWDG 不冲突。
+- **全员报到看门狗** — IWDG 2s,只有三任务在一轮内**各自打卡集齐**才喂狗;任一任务卡死即放任复位,杜绝「主循环活着但某任务僵死」的假活。
+- **tickless 低功耗** — 空闲即 `WFI` 进 Sleep,睡前停 TIM4 时基、醒后恢复;UART 可秒级唤醒并完整响应命令,且与 IWDG 不冲突。
 - **零警告** — `-Wall -Wextra` 下 0 warning。
 
 ## 硬件与引脚
@@ -131,11 +128,11 @@ flowchart TB
 | 下行 | `0x21` | 查温湿度 | `seq` |
 | 下行 | `0x22` | 设采样周期 | `seq` + 周期秒数(2B 大端 uint16) |
 
-## 看门狗:事件组「全员报到」(N9)
+## 看门狗:事件组「全员报到」
 
 IWDG 一旦启动便不可关停 —— 关键在于**谁有资格喂它**。本节点不在单点喂狗,而是给三任务各分配一个事件位(`WDG_BIT_SAMPLE/CMD/TX`):每个任务在自己的循环里 `xEventGroupSetBits` 打卡,只有 `vSampleReportTask` 发现**三位集齐**时才 `HAL_IWDG_Refresh` 并清零、开启下一轮。任一任务僵死(再不打卡)→ 集不齐 → 2s 后 IWDG 复位。这样看门狗监督的是「全员都活着」,而非「主循环还在转」。
 
-## 低功耗:tickless Sleep(N10)
+## 低功耗:tickless Sleep
 
 `configUSE_TICKLESS_IDLE=1` 后,空闲任务自动 `WFI` 进 Sleep(仅关 CPU 时钟,外设照常)。两点适配均在 `FreeRTOSConfig.h` 钩子里,**不改 `port.c`**:
 
@@ -178,20 +175,6 @@ arm-none-eabi-addr2line -f -i -e build/Debug/N6_freertos.elf 0x........
 
 > 验证 Sleep:`halt` 后看 PC 是否停在 `vPortSuppressTicksAndSleep` 的 `wfi`;静置后 `RCC_CSR.IWDGRSTF` 仍为 0 即证明喂狗在睡眠期不踩线。
 
-## 里程碑
-
-`stm32-learning` 仓库按 Nx 推进(N3–N6 为并列工程,N9/N10 是本工程内的进阶特性):
-
-| | 里程碑 | 内容 |
-|---|---|---|
-| N1 | 时钟树 | HSE + PLL = 72MHz |
-| N3 | 串口 | USART1 收发(`N3_uart`) |
-| N4 | I²C | 驱动 BH1750(`N4_i2c`) |
-| N5 | 单总线 | 驱动 DHT11(`N5_single_wire`) |
-| **N6** | **FreeRTOS** | **多任务整合 + 帧协议 + 下行命令闭环(本工程)** |
-| N9 | 看门狗 | IWDG 事件组「全员报到」喂狗 |
-| N10 | 低功耗 | tickless idle → Sleep |
-
 ## 目录结构
 
 ```
@@ -215,4 +198,4 @@ N6_freertos/
 
 ---
 
-里程碑学习工程,© 2026 manbaaa-out。
+© 2026 manbaaa-out
