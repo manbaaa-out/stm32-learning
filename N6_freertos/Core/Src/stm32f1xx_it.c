@@ -144,15 +144,21 @@ void UsageFault_Handler(void)
 /**
   * @brief This function handles System service call via SWI instruction.
   */
-// void SVC_Handler(void)
-// {
-//   /* USER CODE BEGIN SVCall_IRQn 0 */
+/* SVC/PendSV/SysTick 三个处理函数由 FreeRTOS port.c 提供(FreeRTOSConfig.h 已把
+   vPortSVCHandler/xPortPendSVHandler/xPortSysTickHandler #define 成这三个名字)。
+   CubeMX 重新生成会把它们当成空桩加回来 → 与 port.c 重复定义、链接失败。这里用
+   #if 0 关掉。⚠ 以后再跑 CubeMX 代码生成,需再次关掉这三处。 */
+#if 0
+void SVC_Handler(void)
+{
+  /* USER CODE BEGIN SVCall_IRQn 0 */
 
-//   /* USER CODE END SVCall_IRQn 0 */
-//   /* USER CODE BEGIN SVCall_IRQn 1 */
+  /* USER CODE END SVCall_IRQn 0 */
+  /* USER CODE BEGIN SVCall_IRQn 1 */
 
-//   /* USER CODE END SVCall_IRQn 1 */
-// }
+  /* USER CODE END SVCall_IRQn 1 */
+}
+#endif
 
 /**
   * @brief This function handles Debug monitor.
@@ -170,29 +176,33 @@ void DebugMon_Handler(void)
 /**
   * @brief This function handles Pendable request for system service.
   */
-// void PendSV_Handler(void)
-// {
-//   /* USER CODE BEGIN PendSV_IRQn 0 */
+#if 0
+void PendSV_Handler(void)
+{
+  /* USER CODE BEGIN PendSV_IRQn 0 */
 
-//   /* USER CODE END PendSV_IRQn 0 */
-//   /* USER CODE BEGIN PendSV_IRQn 1 */
+  /* USER CODE END PendSV_IRQn 0 */
+  /* USER CODE BEGIN PendSV_IRQn 1 */
 
-//   /* USER CODE END PendSV_IRQn 1 */
-// }
+  /* USER CODE END PendSV_IRQn 1 */
+}
+#endif
 
-// /**
-//   * @brief This function handles System tick timer.
-//   */
-// void SysTick_Handler(void)
-// {
-//   /* USER CODE BEGIN SysTick_IRQn 0 */
+/**
+  * @brief This function handles System tick timer.
+  */
+#if 0
+void SysTick_Handler(void)
+{
+  /* USER CODE BEGIN SysTick_IRQn 0 */
 
-//   /* USER CODE END SysTick_IRQn 0 */
+  /* USER CODE END SysTick_IRQn 0 */
 
-//   /* USER CODE BEGIN SysTick_IRQn 1 */
+  /* USER CODE BEGIN SysTick_IRQn 1 */
 
-//   /* USER CODE END SysTick_IRQn 1 */
-// }
+  /* USER CODE END SysTick_IRQn 1 */
+}
+#endif
 
 /******************************************************************************/
 /* STM32F1xx Peripheral Interrupt Handlers                                    */
