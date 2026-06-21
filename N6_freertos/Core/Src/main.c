@@ -142,6 +142,12 @@ int main(void)
   MX_I2C1_Init();
   MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
+  /* 调试时冻结 IWDG 与 TIM4 计数, 避免暂停断点时被看门狗复位。
+     F1 的 DBGMCU 属 Cortex-M3 调试域, 常通无 APB 时钟门, 故无需(也没有)
+     __HAL_RCC_DBGMCU_CLK_ENABLE(); 两个 FREEZE 宏直接置位 DBGMCU->CR。 */
+  __HAL_DBGMCU_FREEZE_IWDG();
+  __HAL_DBGMCU_FREEZE_TIM4();
+
   /* 必须先开 DWT 周期计数器: delay_us() 与 dht11_wait_level() 的超时都靠 CYCCNT。
      不开则 CYCCNT 恒为 0, delay_us 死等、DHT11 超时永不触发 → DHT11_Read 在
      taskENTER_CRITICAL 临界区里死循环, SysTick 被屏蔽, 整个 RTOS 卡死, 串口零输出。 */
@@ -226,7 +232,7 @@ void vTxTask(void* pvParameters) {
   TxFrame_t frame;
   while(1) {
     /* 超时 500ms 醒一次: 没东西发也要醒来打卡(<1s 判定窗口, 留余量)。 */
-    if (xQueueReceive(xTxQueue, &frame, pdMS_TO_TICKS(500)) == pdPASS) {
+    if (xQueueReceive(xTxQueue, &frame, pdMS_TO_TICKS(800)) == pdPASS) {
       HAL_UART_Transmit(&huart1, frame.data, frame.len, HAL_MAX_DELAY);
     }
     xEventGroupSetBits(g_wdg_events, WDG_BIT_TX);   // 打卡放 if 外: 任务活着就报到, 不论有没有发
@@ -324,7 +330,7 @@ void vCmdTask(void *pv)
     uint8_t buf[32];
     for (;;) {
         /* 超时 500ms 醒一次: 没收到数据也要醒来打卡(<1s 判定窗口, 留余量)。 */
-        size_t n = xStreamBufferReceive(g_rx_stream, buf, sizeof buf, pdMS_TO_TICKS(500));
+        size_t n = xStreamBufferReceive(g_rx_stream, buf, sizeof buf, pdMS_TO_TICKS(800));
         for (size_t i = 0; i < n; i++)
             frame_parser_feed(&parser, buf[i]);
         xEventGroupSetBits(g_wdg_events, WDG_BIT_CMD);   // n 可能为 0, 但任务活着就打卡

@@ -6,6 +6,7 @@
 #define configCPU_CLOCK_HZ          ( 72000000UL )   /* CPU 主频, 你 N1 配的 72MHz */
 #define configTICK_RATE_HZ          ( 1000 )         /* 节拍频率 1000Hz, 即每 1ms 一个 tick */
 #define configUSE_PREEMPTION        1                /* 1=抢占式调度 */
+#define configUSE_TICKLESS_IDLE     1                /* 1=空闲时进 Sleep(WFI)低功耗, port.c 内置 vPortSuppressTicksAndSleep */
 #define configMAX_PRIORITIES        ( 7 )            /* 任务优先级档数 0~6 */
 #define configMINIMAL_STACK_SIZE    ( 128 )          /* 空闲任务的栈大小, 单位是"字"(4字节), 即 512 字节 */
 #define configMAX_TASK_NAME_LEN     ( 16 )           /* 任务名最大字符数 */
@@ -52,6 +53,16 @@
 
 /* 断言失败时停在这里, 调试器一看就知道哪行触发 */
 #define configASSERT( x )  if( ( x ) == 0 ) { taskDISABLE_INTERRUPTS(); for( ;; ); }
+
+/* ====== tickless 睡眠钩子 (configUSE_TICKLESS_IDLE 用) ====== */
+/* 睡前停 TIM4 时基中断: 它是 HAL 时基(1kHz 唤醒源), 不停会每 1ms 把 CPU 从
+   WFI 唤醒、tickless 失效; 停了同时冻结 uwTick。醒后恢复。函数体在
+   stm32f1xx_hal_timebase_tim.c, 这里只声明(不能 include hal.h, 会污染本配置头)。
+   port.c 重编程 SysTick 在下一个截止点唤醒, 不依赖 TIM4。 */
+extern void HAL_SuspendTick(void);
+extern void HAL_ResumeTick(void);
+#define configPRE_SLEEP_PROCESSING( x )   do { HAL_SuspendTick(); } while(0)
+#define configPOST_SLEEP_PROCESSING( x )  do { HAL_ResumeTick();  } while(0)
 
 /* ====== 区块七: API 裁剪 (INCLUDE_ 决定哪些函数编进来) ====== */
 #define INCLUDE_vTaskPrioritySet            1
